@@ -1,0 +1,5 @@
+/.agents/scripts/
+/.agents/skills/
+.DS_Store
+.vscode/
+.obsidian/
