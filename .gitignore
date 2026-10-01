@@ -3,3 +3,15 @@
 .DS_Store
 .vscode/
 .obsidian/
+
+# Local configuration and generated outputs
+.env
+.env.local
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+__pycache__/
+*.pyc

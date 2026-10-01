@@ -1,0 +1,39 @@
+{
+  "name": "quvetrail",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=24.21.0 <25",
+    "pnpm": ">=12.8.1 <13"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run --config vitest.config.ts",
+    "test:api": "vitest run --config vitest.api.config.ts",
+    "test:e2e": "playwright test",
+    "check:contracts": "python3 tools/check_contracts.py --root .",
+    "check:contracts:index": "python3 tools/check_contracts.py --root . --write-index",
+    "test:contracts": "python3 -m unittest tools/test_check_contracts.py",
+    "check:architecture:tree": "dependency-cruiser --config .dependency-cruiser.cjs apps tools",
+    "check:architecture": "pnpm check:architecture:tree && node tools/test-architecture-gate.mjs",
+    "check": "pnpm check:contracts && pnpm test:contracts && pnpm check:architecture && pnpm typecheck && pnpm build && pnpm test",
+    "system:start": "bash scripts/start.sh",
+    "system:wait": "bash scripts/wait-for-health.sh",
+    "system:stop": "docker compose down",
+    "system:logs": "docker compose logs --tail=200",
+    "db:migrate": "docker compose exec -T api pnpm --filter @quvetrail/api db:migrate",
+    "db:reset": "bash scripts/reset-database.sh",
+    "smoke:persistence": "bash scripts/check-persistence.sh",
+    "verify": "bash scripts/verify.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.6.4",
+    "dependency-cruiser": "18.5.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.3"
+  }
+}

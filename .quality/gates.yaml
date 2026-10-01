@@ -1,0 +1,17 @@
+version: 1
+gates:
+  focused:
+    command: pnpm check
+  architecture:
+    command: pnpm check:architecture
+    mode: CLEAN
+    policy: .dependency-cruiser.cjs
+    baseline: null
+  contracts:
+    command: pnpm check:contracts
+  full:
+    command: pnpm verify
+review:
+  maintainability:
+    skill: task-maintainability-review
+    required: true
