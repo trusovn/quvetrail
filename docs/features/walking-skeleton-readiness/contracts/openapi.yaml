@@ -1,0 +1,907 @@
+# Derived, never hand-written: fields+constraints ← data-model.md; error responses ← sad.md §6
+# alt-branches; endpoint list + shape ← spec.md §4/§5. Deviations from scaffold defaults are
+# recorded in api-sync-report.md (auth scaffold dropped by spec §6.1; no events — all §6 flows
+# synchronous per sad.md §6 sequencing notes).
+openapi: 3.1.0
+
+info:
+  title: QuVeTrail Walking Skeleton API
+  version: 0.1.0
+  # Bump `version` only with an explicit CHANGELOG line — never silently.
+  description: |
+    A QA engineer needs to know whether recorded verification evidence applies to the exact
+    Environment configuration that requires evidence. The Walking Skeleton is the smallest real
+    product flow across the intended boundaries: the QA engineer progressively records a
+    Project → Environment → Verification Target → (optional) Verification Run hierarchy in a
+    browser workspace, and QuVeTrail derives an Evidence Status — MATCH, MISMATCH, or
+    UNAVAILABLE (NO_EVIDENCE stays a domain value the UI renders as workflow guidance) — that
+    states evidence applicability only, never test outcomes or Readiness. The API validates
+    input, accepts each record in one synchronous request-scoped transaction (ADR-0002), and
+    derives Evidence Status at read time from the durable authoritative hierarchy (ADR-0003).
+
+    Save outcomes: 201 SAVED requires confirmed durable commit. Operation-specific
+    503 *.save_failed requires known non-acceptance: COMMIT was never dispatched and cannot
+    subsequently be dispatched, or rollback/non-commit of that transaction is confirmed.
+    Parent-context read failure before writes also permits save_failed. An arbitrary DB,
+    transaction or COMMIT exception does not prove non-acceptance; the persistence adapter
+    owns this evidence and the application/HTTP layers preserve the distinction (SAD §6).
+    If COMMIT may have been dispatched and its outcome cannot be established, return
+    503 *.save_outcome_unknown using the existing Error envelope, with no accepted record,
+    SAVED, or evidence_status. Cleanup ROLLBACK after uncertain COMMIT is not rollback proof.
+
+    Recovery: only a valid received operation-specific 503 *.save_failed permits retry-safe
+    SAVE_FAILED presentation and user-initiated POST retry. A received 503 *.save_outcome_unknown,
+    POST transport/network failure (including response loss after commit), or unrecognized/unusable
+    POST response requires the same unknown-acceptance recovery. Do not label it SAVE_FAILED or
+    SAVED, and do not automatically replay the POST. Block creates and reload GET /api/v1/workspace
+    first; replace the hierarchy with recovered authoritative state without retroactively declaring
+    the attempted save successful or failed. If recovery fails, show UNAVAILABLE and retry only GET
+    while creates remain blocked. Reliable recovery permits a new explicit create from recovered
+    context; absence in a GET snapshot is not proof of rollback or a duplicate-free retry guarantee.
+    Repeated creates remain allowed. No idempotency keys or new recovery endpoints are used.
+
+    Request validation: all POST JSON bodies use strict schemas without coercion or stripping
+    unexpected properties, including nested objects. Missing required properties, wrong types,
+    unexpected properties, absent bodies and malformed JSON return HTTP 400 request.invalid_body
+    with ValidationError (code, message, required details.fields), before use cases or writes.
+    Empty-after-trim strings in structurally valid bodies retain their operation-specific
+    invalid_* codes. Structural validation precedes domain validation; do not combine the two.
+    For a structurally valid request, evaluate all accepted-text inputs and report all fields
+    empty after trimming. Fixed code precedence: Project/Environment name; Target key then
+    value; Run run_reference then observed_run_state.key then observed_run_state.value.
+    The first failing field in that order supplies its existing operation-specific code.
+    JSON property order is irrelevant. details.fields contains all failing paths sorted and
+    deduplicated, independently of code precedence. Nothing is recorded on any validation error.
+    details.fields contains sorted, deduplicated dotted paths: missing/wrong-type fields use
+    their path (e.g. name, observed_run_state, observed_run_state.key); unexpected keys use the
+    full rejected-key path (e.g. extra, observed_run_state.extra). Body-level errors (absent
+    body, malformed JSON, non-object root) use "$". The message is a readable explanation,
+    not a serialized Fastify/Zod error. UI fields with known paths receive inline messages;
+    for domain errors each listed field receives a non-empty-after-trim explanation, rather
+    than using the primary code to show only one error or copying a primary field's message
+    onto other fields. A multi-field message may say "Each highlighted field must be non-empty
+    after trimming." Single-field examples retain their existing explanations.
+    unknown paths and "$" receive form-level messages. General non-validation errors retain
+    the Error envelope with optional details.
+
+    Reliable hierarchy reads use data-model.md §Current hierarchy validity (AC-20): greatest
+    visible accepted UUID at each parent-scoped level (ORDER BY id DESC LIMIT 1), valid missing
+    children before a Run exists, and exactly one state
+    for the current Run. Older branches and externally inserted empty/untrimmed strings do
+    not by themselves trigger UNAVAILABLE. Stored text is not revalidated on reads; successful
+    application acceptance trims and rejects empty values. created_at is assigned during the
+    acceptance transaction (PostgreSQL now()), not the exact commit instant. "Current" uses
+    UUID order, including after repeated creates; it does not promise exact acceptance/commit
+    chronology (same-millisecond IDs, clock skew and transaction completion may interleave).
+
+servers:
+  - url: http://localhost:3000
+    description: Local (Docker Compose — the only deployment unit this slice defines)
+
+# No security scheme: authentication and authorization are explicitly out of scope — one trusted
+# QA engineer in a controlled installation (spec §6.1, SAD §8). The BearerAuth scaffold default
+# is dropped here, not commented out — a consumer must not wire a token. Revisit before any
+# production deployment planning (spec §8 open question).
+
+paths:
+  /api/v1/projects:
+    post:
+      summary: Accept the Project record for the current workspace
+      operationId: createProject
+      description: |
+        US-01 / AC-01, AC-02. The name is trimmed by the API before validation (AC-14a):
+        leading and trailing whitespace is removed, every remaining character is preserved
+        (case-sensitive, no further normalization). Acceptance is a single transaction
+        (ADR-0002); `SAVED` is returned only after commit. The sole Project is current on
+        initial creation. With repeated creates, current selection uses the greatest visible
+        accepted UUID (ADR-0005), without promising that each new commit sorts last.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProjectCreate" }
+            examples:
+              valid:
+                value:
+                  name: "Test Project"
+              whitespace_padded:
+                value:
+                  name: "  Test Project  "
+                description: Stored trimmed as "Test Project" — AC-14a
+      responses:
+        "201":
+          description: Durable acceptance confirmed — `SAVED`. No success is reported before confirmed commit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProjectSaveOutcome" }
+              examples:
+                saved:
+                  summary: SAVED after commit
+                  value:
+                    outcome: "SAVED"
+                    record:
+                      id: "0192d741-2000-7000-8000-000000000001"
+                      name: "Test Project"
+                      created_at: "2026-10-05T09:00:00.000Z"
+        "400":
+          description: |
+            VALIDATION_ERROR (AC-02) — the name is empty after trimming. Nothing is recorded;
+            retry is expected with corrected input.
+            Structural body failures return request.invalid_body as defined in info.description.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              examples:
+                invalid_body:
+                  summary: Body is not a JSON object
+                  value:
+                    code: "request.invalid_body"
+                    message: "The request body does not match the required shape."
+                    details:
+                      fields: ["$"]
+                empty_name:
+                  value:
+                    code: "project.invalid_name"
+                    message: "Project name must be non-empty after trimming."
+                    details:
+                      fields: ["name"]
+        "503":
+          description: |
+            Two distinct acceptance outcomes in the existing Error envelope (AC-16 / AC-16a).
+            *.save_failed: non-acceptance is known under SAD §6; nothing of the attempted
+            record was accepted, prior data is preserved, and user-initiated POST retry is safe.
+            *.save_outcome_unknown: acceptance cannot be established, including lost COMMIT
+            acknowledgement. Claim neither SAVED nor rollback; block creates and recover via
+            GET /api/v1/workspace before explicit continuation. Never automatically replay POST.
+            Status 503 alone does not imply retry safety; branch on the operation-specific code.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      code:
+                        enum: ["project.save_failed", "project.save_outcome_unknown"]
+              examples:
+                save_failed:
+                  value:
+                    code: "project.save_failed"
+                    message: "Project could not be durably accepted. Previously accepted data is preserved; you can retry."
+                save_outcome_unknown:
+                  value:
+                    code: "project.save_outcome_unknown"
+                    message: "Project save outcome could not be confirmed. Reload the workspace before continuing."
+
+  /api/v1/environments:
+    post:
+      summary: Accept an Environment record within the current Project
+      operationId: createEnvironment
+      description: |
+        US-02 / AC-03, AC-04, AC-05. Same trim-then-validate rule (AC-14a) and one-transaction
+        acceptance (ADR-0002) as `createProject`. The Project context is not a request parameter:
+        the API reads the current Project (greatest visible accepted UUID) itself — the client never supplies
+        hierarchy context.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvironmentCreate" }
+            examples:
+              valid:
+                value:
+                  name: "QA"
+      responses:
+        "201":
+          description: |
+            Durable acceptance completed — `SAVED`. The Environment is linked to the current
+            Project; the Verification Target action becomes available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnvironmentSaveOutcome" }
+              examples:
+                saved:
+                  value:
+                    outcome: "SAVED"
+                    record:
+                      id: "0192d741-2000-7000-8000-000000000002"
+                      project_id: "0192d741-2000-7000-8000-000000000001"
+                      name: "QA"
+                      created_at: "2026-10-05T09:05:00.000Z"
+        "400":
+          description: |
+            VALIDATION_ERROR (AC-05) — the name is empty after trimming. Nothing is recorded;
+            retry is expected.
+            Structural body failures return request.invalid_body as defined in info.description.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              examples:
+                invalid_body:
+                  summary: Body is not a JSON object
+                  value:
+                    code: "request.invalid_body"
+                    message: "The request body does not match the required shape."
+                    details:
+                      fields: ["$"]
+                empty_name:
+                  value:
+                    code: "environment.invalid_name"
+                    message: "Environment name must be non-empty after trimming."
+                    details:
+                      fields: ["name"]
+        "409":
+          description: |
+            Prerequisite missing (AC-04) — no Project is durably accepted yet, so an Environment
+            cannot be recorded. Nothing is accepted. The workspace keeps the action unavailable
+            and explains the prerequisite.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                no_project:
+                  value:
+                    code: "environment.project_missing"
+                    message: "An Environment requires a Project context. Create the Project first."
+        "503":
+          description: |
+            Two distinct acceptance outcomes in the existing Error envelope (AC-16 / AC-16a).
+            *.save_failed: non-acceptance is known under SAD §6; nothing of the attempted
+            record was accepted, prior data is preserved, and user-initiated POST retry is safe.
+            *.save_outcome_unknown: acceptance cannot be established, including lost COMMIT
+            acknowledgement. Claim neither SAVED nor rollback; block creates and recover via
+            GET /api/v1/workspace before explicit continuation. Never automatically replay POST.
+            Status 503 alone does not imply retry safety; branch on the operation-specific code.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      code:
+                        enum: ["environment.save_failed", "environment.save_outcome_unknown"]
+              examples:
+                save_failed:
+                  value:
+                    code: "environment.save_failed"
+                    message: "Environment could not be durably accepted. Previously accepted data is preserved; you can retry."
+                save_outcome_unknown:
+                  value:
+                    code: "environment.save_outcome_unknown"
+                    message: "Environment save outcome could not be confirmed. Reload the workspace before continuing."
+
+  /api/v1/verification-targets:
+    post:
+      summary: Accept the Verification Target record for the current Environment
+      operationId: createVerificationTarget
+      description: |
+        US-03 / AC-06, AC-07, AC-08. The target `key`/`value` pair is the configuration
+        comparison context evidence is required for — NOT a deployment instruction
+        (CONTEXT.md). Same trim-then-validate rule (AC-14a, both fields) and one-transaction
+        acceptance (ADR-0002). No Evidence Status is derived from this operation alone.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerificationTargetCreate" }
+            examples:
+              valid:
+                value:
+                  key: "browser"
+                  value: "chrome-130"
+      responses:
+        "201":
+          description: |
+            Durable acceptance completed — `SAVED`. The Verification Target is linked to the
+            current Environment; the Verification Run action becomes available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerificationTargetSaveOutcome" }
+              examples:
+                saved:
+                  value:
+                    outcome: "SAVED"
+                    record:
+                      id: "0192d741-2000-7000-8000-000000000003"
+                      environment_id: "0192d741-2000-7000-8000-000000000002"
+                      key: "browser"
+                      value: "chrome-130"
+                      created_at: "2026-10-05T09:10:00.000Z"
+        "400":
+          description: |
+            VALIDATION_ERROR (AC-08) — the key or value is empty after trimming. Nothing is
+            recorded; retry is expected.
+            Structural body failures return request.invalid_body as defined in info.description.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              examples:
+                invalid_body:
+                  summary: Body is not a JSON object
+                  value:
+                    code: "request.invalid_body"
+                    message: "The request body does not match the required shape."
+                    details:
+                      fields: ["$"]
+                empty_key:
+                  value:
+                    code: "verification_target.invalid_key"
+                    message: "Verification Target key must be non-empty after trimming."
+                    details:
+                      fields: ["key"]
+                empty_value:
+                  value:
+                    code: "verification_target.invalid_value"
+                    message: "Verification Target value must be non-empty after trimming."
+                    details:
+                      fields: ["value"]
+                empty_key_and_value:
+                  summary: Both Target fields empty after trimming; key code wins
+                  value:
+                    code: "verification_target.invalid_key"
+                    message: "Each highlighted field must be non-empty after trimming."
+                    details:
+                      fields: ["key", "value"]
+        "409":
+          description: |
+            Prerequisite missing (AC-07) — no Environment is durably accepted yet. Nothing is
+            accepted. The workspace keeps the action unavailable and explains the prerequisite.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                no_environment:
+                  value:
+                    code: "verification_target.environment_missing"
+                    message: "A Verification Target requires an Environment. Create the Environment first."
+        "503":
+          description: |
+            Two distinct acceptance outcomes in the existing Error envelope (AC-16 / AC-16a).
+            *.save_failed: non-acceptance is known under SAD §6; nothing of the attempted
+            record was accepted, prior data is preserved, and user-initiated POST retry is safe.
+            *.save_outcome_unknown: acceptance cannot be established, including lost COMMIT
+            acknowledgement. Claim neither SAVED nor rollback; block creates and recover via
+            GET /api/v1/workspace before explicit continuation. Never automatically replay POST.
+            Status 503 alone does not imply retry safety; branch on the operation-specific code.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      code:
+                        enum: ["verification_target.save_failed", "verification_target.save_outcome_unknown"]
+              examples:
+                save_failed:
+                  value:
+                    code: "verification_target.save_failed"
+                    message: "Verification Target could not be durably accepted. Previously accepted data is preserved; you can retry."
+                save_outcome_unknown:
+                  value:
+                    code: "verification_target.save_outcome_unknown"
+                    message: "Verification Target save outcome could not be confirmed. Reload the workspace before continuing."
+
+  /api/v1/verification-runs:
+    post:
+      summary: Accept a Verification Run with its Observed Run State
+      operationId: createVerificationRun
+      description: |
+        US-04 / AC-10, AC-11, AC-12, AC-13. The run reference and the Observed Run State
+        key/value are trusted user assertions about an external run (spec §6.1) — the API does
+        not authenticate or prove them. Run + Observed Run State are accepted together in one
+        transaction (the run aggregate — ADR-0002). After commit, the API derives Evidence
+        Status by comparing trimmed values case-sensitively: exact key and value equality is
+        the only MATCH path (AC-14); any difference yields MISMATCH. Both describe evidence
+        applicability only, never test outcome or Readiness (AC-15).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerificationRunCreate" }
+            examples:
+              matching:
+                summary: Observed state exactly equals the target → SAVED + MATCH
+                value:
+                  run_reference: "run-001"
+                  observed_run_state:
+                    key: "browser"
+                    value: "chrome-130"
+              mismatching:
+                summary: Observed value differs from the target → SAVED + MISMATCH
+                value:
+                  run_reference: "run-001"
+                  observed_run_state:
+                    key: "browser"
+                    value: "firefox-133"
+      responses:
+        "201":
+          description: |
+            Durable acceptance completed — `SAVED` — plus the derived Evidence Status
+            (`MATCH` or `MISMATCH`) computed from the readable authoritative hierarchy at read
+            time (ADR-0003). The status field describes applicability only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerificationRunSaveOutcome" }
+              examples:
+                saved_match:
+                  value:
+                    outcome: "SAVED"
+                    evidence_status: "MATCH"
+                    record:
+                      id: "0192d741-2000-7000-8000-000000000004"
+                      verification_target_id: "0192d741-2000-7000-8000-000000000003"
+                      run_reference: "run-001"
+                      observed_run_state:
+                        id: "0192d741-2000-7000-8000-000000000005"
+                        verification_run_id: "0192d741-2000-7000-8000-000000000004"
+                        key: "browser"
+                        value: "chrome-130"
+                        created_at: "2026-10-05T09:15:00.000Z"
+                      created_at: "2026-10-05T09:15:00.000Z"
+                saved_mismatch:
+                  value:
+                    outcome: "SAVED"
+                    evidence_status: "MISMATCH"
+                    record:
+                      id: "0192d741-2000-7000-8000-000000000004"
+                      verification_target_id: "0192d741-2000-7000-8000-000000000003"
+                      run_reference: "run-001"
+                      observed_run_state:
+                        id: "0192d741-2000-7000-8000-000000000005"
+                        verification_run_id: "0192d741-2000-7000-8000-000000000004"
+                        key: "browser"
+                        value: "firefox-133"
+                        created_at: "2026-10-05T09:15:00.000Z"
+                      created_at: "2026-10-05T09:15:00.000Z"
+        "400":
+          description: |
+            VALIDATION_ERROR (AC-12) — the run reference, observed key, or observed value is
+            empty after trimming. Nothing is recorded; retry is expected.
+            Structural body failures return request.invalid_body as defined in info.description.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+              examples:
+                invalid_body:
+                  summary: Body is not a JSON object
+                  value:
+                    code: "request.invalid_body"
+                    message: "The request body does not match the required shape."
+                    details:
+                      fields: ["$"]
+                empty_reference:
+                  value:
+                    code: "verification_run.invalid_run_reference"
+                    message: "Verification Run reference must be non-empty after trimming."
+                    details:
+                      fields: ["run_reference"]
+                empty_observed_key:
+                  value:
+                    code: "verification_run.invalid_observed_key"
+                    message: "Observed Run State key must be non-empty after trimming."
+                    details:
+                      fields: ["observed_run_state.key"]
+                empty_observed_value:
+                  value:
+                    code: "verification_run.invalid_observed_value"
+                    message: "Observed Run State value must be non-empty after trimming."
+                    details:
+                      fields: ["observed_run_state.value"]
+                empty_all_text:
+                  summary: All three Run fields empty after trimming; reference code wins
+                  value:
+                    code: "verification_run.invalid_run_reference"
+                    message: "Each highlighted field must be non-empty after trimming."
+                    details:
+                      fields: ["observed_run_state.key", "observed_run_state.value", "run_reference"]
+                empty_observed_key_and_value:
+                  summary: Valid reference but both observed fields empty; observed key code wins
+                  value:
+                    code: "verification_run.invalid_observed_key"
+                    message: "Each highlighted field must be non-empty after trimming."
+                    details:
+                      fields: ["observed_run_state.key", "observed_run_state.value"]
+        "409":
+          description: |
+            Prerequisite missing (AC-13) — no Verification Target is durably accepted yet.
+            Nothing is accepted. The workspace keeps the action unavailable and explains that
+            a Verification Target must be defined first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                no_target:
+                  value:
+                    code: "verification_run.verification_target_missing"
+                    message: "A Verification Run requires a Verification Target. Define the Verification Target first."
+        "503":
+          description: |
+            Two distinct acceptance outcomes in the existing Error envelope (AC-16 / AC-16a).
+            *.save_failed: non-acceptance is known under SAD §6; nothing of the attempted
+            record was accepted, prior data is preserved, and user-initiated POST retry is safe.
+            *.save_outcome_unknown: acceptance cannot be established, including lost COMMIT
+            acknowledgement. Claim neither SAVED nor rollback; block creates and recover via
+            GET /api/v1/workspace before explicit continuation. Never automatically replay POST.
+            Status 503 alone does not imply retry safety; branch on the operation-specific code.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      code:
+                        enum: ["verification_run.save_failed", "verification_run.save_outcome_unknown"]
+              examples:
+                save_failed:
+                  value:
+                    code: "verification_run.save_failed"
+                    message: "Verification Run could not be durably accepted. Previously accepted data is preserved; you can retry."
+                save_outcome_unknown:
+                  value:
+                    code: "verification_run.save_outcome_unknown"
+                    message: "Verification Run save outcome could not be confirmed. Reload the workspace before continuing."
+
+  /api/v1/workspace:
+    get:
+      summary: Read the accepted hierarchy with the derived Evidence Status
+      operationId: getWorkspace
+      description: |
+        US-05, US-06, US-08, US-09 / AC-09, AC-14, AC-15, AC-18, AC-19, AC-19a, AC-20.
+        The authoritative read for refresh/restart recovery and status review: returns exactly
+        the accepted hierarchy levels (SPA with server-authoritative state — ADR-0004), and
+        derives Evidence Status at read time from the readable data (ADR-0003). The UI is
+        expected to render `NO_EVIDENCE` as workflow guidance (a Verification Run has not been
+        recorded yet), never as an assessment result beside MATCH/MISMATCH (AC-09, AC-19).
+        One GET returns one coherent view: current Project and parent-scoped descendants,
+        including absences and the selected Run's associated state, share one database
+        visibility snapshot (SAD §6 / data-model current hierarchy validity). Concurrent
+        acceptance cannot change visibility halfway through the result. This snapshot
+        does not establish the historical outcome of an uncertain POST.
+        A `503` on this operation is a workspace state to surface to the QA engineer as
+        UNAVAILABLE — with no applicability conclusion — not a transient error to silently
+        retry.
+      responses:
+        "200":
+          description: |
+            The accepted hierarchy restored — exactly the accepted levels, no unaccepted
+            dependent records. `evidence_status` is null before a Verification Target exists
+            (AC-19a); `NO_EVIDENCE` when a Target is accepted without a Run (UI renders
+            workflow guidance, not a result); `MATCH`/`MISMATCH` when a complete run context
+            is accepted (applicability only — AC-15).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Workspace" }
+              examples:
+                full_hierarchy_match:
+                  summary: Complete hierarchy with MATCH reproduced (AC-18)
+                  value:
+                    evidence_status: "MATCH"
+                    project:
+                      id: "0192d741-2000-7000-8000-000000000001"
+                      name: "Test Project"
+                      created_at: "2026-10-05T09:00:00.000Z"
+                    environment:
+                      id: "0192d741-2000-7000-8000-000000000002"
+                      project_id: "0192d741-2000-7000-8000-000000000001"
+                      name: "QA"
+                      created_at: "2026-10-05T09:05:00.000Z"
+                    verification_target:
+                      id: "0192d741-2000-7000-8000-000000000003"
+                      environment_id: "0192d741-2000-7000-8000-000000000002"
+                      key: "browser"
+                      value: "chrome-130"
+                      created_at: "2026-10-05T09:10:00.000Z"
+                    verification_run:
+                      id: "0192d741-2000-7000-8000-000000000004"
+                      verification_target_id: "0192d741-2000-7000-8000-000000000003"
+                      run_reference: "run-001"
+                      observed_run_state:
+                        id: "0192d741-2000-7000-8000-000000000005"
+                        verification_run_id: "0192d741-2000-7000-8000-000000000004"
+                        key: "browser"
+                        value: "chrome-130"
+                        created_at: "2026-10-05T09:15:00.000Z"
+                      created_at: "2026-10-05T09:15:00.000Z"
+                target_without_run:
+                  summary: Target accepted, run absent → NO_EVIDENCE for the UI's guidance (AC-09, AC-19)
+                  value:
+                    evidence_status: "NO_EVIDENCE"
+                    project:
+                      id: "0192d741-2000-7000-8000-000000000001"
+                      name: "Test Project"
+                      created_at: "2026-10-05T09:00:00.000Z"
+                    environment:
+                      id: "0192d741-2000-7000-8000-000000000002"
+                      project_id: "0192d741-2000-7000-8000-000000000001"
+                      name: "QA"
+                      created_at: "2026-10-05T09:05:00.000Z"
+                    verification_target:
+                      id: "0192d741-2000-7000-8000-000000000003"
+                      environment_id: "0192d741-2000-7000-8000-000000000002"
+                      key: "browser"
+                      value: "chrome-130"
+                      created_at: "2026-10-05T09:10:00.000Z"
+                    verification_run: null
+                partial_hierarchy:
+                  summary: Only Project/Environment accepted → status null, no Evidence Status shown (AC-19a)
+                  value:
+                    evidence_status: null
+                    project:
+                      id: "0192d741-2000-7000-8000-000000000001"
+                      name: "Test Project"
+                      created_at: "2026-10-05T09:00:00.000Z"
+                    environment:
+                      id: "0192d741-2000-7000-8000-000000000002"
+                      project_id: "0192d741-2000-7000-8000-000000000001"
+                      name: "QA"
+                      created_at: "2026-10-05T09:05:00.000Z"
+                    verification_target: null
+                    verification_run: null
+                empty_workspace:
+                  summary: Nothing accepted yet → all levels null (US-08 recovery of an empty workspace)
+                  value:
+                    evidence_status: null
+                    project: null
+                    environment: null
+                    verification_target: null
+                    verification_run: null
+        "503":
+          description: |
+            UNAVAILABLE (AC-20) — an authoritative record required to restore the hierarchy
+            could not be read reliably (read failure, or malformed / inconsistent accepted
+            relationships). No applicability conclusion is returned; the UI must show
+            UNAVAILABLE and explain that the evidence context cannot currently be relied
+            upon. Matches the repo's 503-on-database-unavailability convention
+            (`/health`, SAD §8).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+              examples:
+                unreadable:
+                  value:
+                    code: "workspace.unavailable"
+                    message: "The recorded evidence context cannot be read reliably and cannot currently be relied upon."
+
+components:
+  # No securitySchemes — auth explicitly out of scope this slice (spec §6.1, SAD §8).
+  schemas:
+    # Unified error envelope. `code` is the neutral `module.error_name` convention.
+    Error:
+      type: object
+      required: [code, message]
+      additionalProperties: false
+      properties:
+        code:
+          type: string
+          pattern: "^[a-z_]+\\.[a-z_]+$"
+          description: neutral snake_case module.error_name; values proposed by this contract (no repo error registry exists yet)
+        message: { type: string }
+        details:
+          type: object
+          description: optional structured context; HTTP 400 uses ValidationError to require typed field details
+
+    ValidationErrorDetails:
+      type: object
+      required: [fields]
+      additionalProperties: false
+      properties:
+        fields:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: All failing paths, sorted and deduplicated; domain code precedence is independent of this ordering. "$" for structural body-level failure (see info.description).
+
+    ValidationError:
+      description: HTTP 400 envelope for domain field validation and structural JSON-body failures.
+      allOf:
+        - $ref: "#/components/schemas/Error"
+        - type: object
+          required: [details]
+          properties:
+            code:
+              type: string
+              enum:
+                - request.invalid_body
+                - project.invalid_name
+                - environment.invalid_name
+                - verification_target.invalid_key
+                - verification_target.invalid_value
+                - verification_run.invalid_run_reference
+                - verification_run.invalid_observed_key
+                - verification_run.invalid_observed_value
+            details: { $ref: "#/components/schemas/ValidationErrorDetails" }
+
+    ProjectSaveOutcome:
+      type: object
+      required: [outcome, record]
+      additionalProperties: false
+      properties:
+        outcome:
+          type: string
+          enum: ["SAVED"]
+          description: |
+            Durable acceptance completed. The API returns this only after the commit
+            succeeded (ADR-0002) — never mid-flight (AC-17).
+        record: { $ref: "#/components/schemas/Project" }
+
+    EnvironmentSaveOutcome:
+      type: object
+      required: [outcome, record]
+      additionalProperties: false
+      properties:
+        outcome:
+          type: string
+          enum: ["SAVED"]
+          description: durable acceptance completed after commit (ADR-0002, AC-17)
+        record: { $ref: "#/components/schemas/Environment" }
+
+    VerificationTargetSaveOutcome:
+      type: object
+      required: [outcome, record]
+      additionalProperties: false
+      properties:
+        outcome:
+          type: string
+          enum: ["SAVED"]
+          description: durable acceptance completed after commit (ADR-0002, AC-17)
+        record: { $ref: "#/components/schemas/VerificationTarget" }
+
+    VerificationRunSaveOutcome:
+      type: object
+      required: [outcome, record, evidence_status]
+      additionalProperties: false
+      properties:
+        outcome:
+          type: string
+          enum: ["SAVED"]
+          description: durable acceptance completed after commit (ADR-0002, AC-17)
+        record: { $ref: "#/components/schemas/VerificationRun" }
+        evidence_status:
+          type: string
+          enum: ["MATCH", "MISMATCH"]
+          description: |
+            Derived Evidence Status after commit — applicability only, never a test outcome
+            or Readiness (AC-14, AC-15).
+
+    Project:
+      type: object
+      required: [id, name, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        name:
+          type: string
+          description: application-accepted values are trimmed (AC-14a); reads preserve stored text and case
+        created_at: { type: string, format: date-time }
+
+    ProjectCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+
+    Environment:
+      type: object
+      required: [id, project_id, name, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        project_id: { type: string, format: uuid }
+        name:
+          type: string
+          description: application-accepted values are trimmed (AC-14a); reads preserve stored text
+        created_at: { type: string, format: date-time }
+
+    EnvironmentCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+
+    VerificationTarget:
+      type: object
+      required: [id, environment_id, key, value, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        environment_id: { type: string, format: uuid }
+        key:
+          type: string
+          description: configuration context required for evidence — comparison target, not an instruction (CONTEXT.md); trimmed on acceptance, compared case-sensitively (AC-14a)
+        value:
+          type: string
+          description: same trim/compare rules as `key`
+        created_at: { type: string, format: date-time }
+
+    VerificationTargetCreate:
+      type: object
+      required: [key, value]
+      additionalProperties: false
+      properties:
+        key: { type: string }
+        value: { type: string }
+
+    VerificationRun:
+      type: object
+      required: [id, verification_target_id, run_reference, observed_run_state, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        verification_target_id: { type: string, format: uuid }
+        run_reference:
+          type: string
+          description: external run identifier — a trusted user assertion (spec §6.1); trimmed on acceptance
+        observed_run_state: { $ref: "#/components/schemas/ObservedRunState" }
+        created_at: { type: string, format: date-time }
+
+    VerificationRunCreate:
+      type: object
+      required: [run_reference, observed_run_state]
+      additionalProperties: false
+      properties:
+        run_reference: { type: string }
+        observed_run_state: { $ref: "#/components/schemas/ObservedRunStateCreate" }
+
+    ObservedRunState:
+      type: object
+      required: [id, verification_run_id, key, value, created_at]
+      additionalProperties: false
+      properties:
+        id: { type: string, format: uuid }
+        verification_run_id: { type: string, format: uuid }
+        key:
+          type: string
+          description: configuration the external run actually exercised; trimmed on acceptance, compared case-sensitively against verification_target.key (AC-14)
+        value:
+          type: string
+          description: same rules as `key`
+        created_at: { type: string, format: date-time }
+
+    ObservedRunStateCreate:
+      type: object
+      required: [key, value]
+      additionalProperties: false
+      properties:
+        key: { type: string }
+        value: { type: string }
+
+    Workspace:
+      type: object
+      required: [evidence_status, project, environment, verification_target, verification_run]
+      additionalProperties: false
+      properties:
+        evidence_status:
+          type: ["string", "null"]
+          enum: ["MATCH", "MISMATCH", "NO_EVIDENCE", null]
+          description: |
+            Derived at read time from the readable authoritative hierarchy (ADR-0003).
+            null — no Verification Target accepted yet (AC-19a: no Evidence Status before a
+            target); NO_EVIDENCE — target without a run (AC-09/AC-19: the UI renders workflow
+            guidance, not a result); MATCH/MISMATCH — complete run context, applicability only
+            (AC-14/AC-15). UNAVAILABLE is never carried here: this response only exists on a
+            reliable read — unreadable context is the 503 error envelope.
+        project:
+          oneOf:
+            - $ref: "#/components/schemas/Project"
+            - type: "null"
+        environment:
+          oneOf:
+            - $ref: "#/components/schemas/Environment"
+            - type: "null"
+          description: absent when no Environment is accepted
+        verification_target:
+          oneOf:
+            - $ref: "#/components/schemas/VerificationTarget"
+            - type: "null"
+          description: absent when no Verification Target is accepted
+        verification_run:
+          oneOf:
+            - $ref: "#/components/schemas/VerificationRun"
+            - type: "null"
+          description: absent when no Verification Run is accepted
