@@ -1,0 +1,417 @@
+{
+  "slug": "walking-skeleton-readiness",
+  "tasks": [
+    {
+      "id": "T1",
+      "title": "Promote the staged hierarchy schema into Drizzle history",
+      "layer": "migration",
+      "deps": [],
+      "acs": [
+        "AC-01",
+        "AC-06",
+        "AC-10",
+        "AC-18"
+      ],
+      "dod": "On an isolated disposable database, the new history applies, reapplies without changes, and the staged down pairs reverse only the new tables in reverse dependency order; all FK indexes and prior foundation data survive the forward migration. New forward SQL and required generated Drizzle metadata are committed; applied history including 0000_foundation.sql is unchanged.",
+      "files_hint": [
+        "apps/api/src/schema.ts",
+        "apps/api/drizzle/**",
+        "docs/features/walking-skeleton-readiness/migrations/**"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/promote-the-staged-hierarchy-schema-into-drizzle-history.md"
+    },
+    {
+      "id": "T2",
+      "title": "Implement pure input and evidence-applicability rules",
+      "layer": "domain",
+      "deps": [],
+      "acs": [
+        "AC-09",
+        "AC-14",
+        "AC-14a",
+        "AC-15",
+        "AC-20"
+      ],
+      "dod": "Focused unit cases prove null before target, NO_EVIDENCE without run, exact equality only for MATCH, every key/value/case difference for MISMATCH, and UNAVAILABLE for unreliable context with no outcome/readiness fields. Unreliable context follows the bounded data-model AC-20 predicate, not persisted textual revalidation. Pure accepted-text cases cover empty/whitespace-only and valid trimmed text for every input; validation exposes each failure so T5 can collect simultaneous failures without I/O or a generic error framework.",
+      "files_hint": [
+        "apps/api/src/domain/",
+        "apps/api/test/unit/evidence-status.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-pure-input-and-evidence-applicability-rules.md"
+    },
+    {
+      "id": "T3",
+      "title": "Implement transactional hierarchy persistence and reliable reads",
+      "layer": "infra",
+      "deps": [
+        "T1",
+        "T2"
+      ],
+      "acs": [
+        "AC-16",
+        "AC-16a",
+        "AC-17",
+        "AC-18",
+        "AC-19a",
+        "AC-20"
+      ],
+      "dod": "Adapter tests demonstrate confirmed commit, known non-acceptance and unknown acceptance, commit-awaited success, rollback of both run rows and preservation of earlier rows when non-acceptance is known. Cover in-flight COMMIT acknowledgement loss, cleanup rollback/error that cannot erase uncertainty, and no automatic transaction retry; real PostgreSQL evidence is completed by T13. Parent-scoped current reads include selected-parent/wrong-run mismatch, zero/multiple current-Run states and query failure; valid partial states and older branches remain reliable per data-model AC-20. The adapter implements the application-owned workspace-repository contract without outer-layer types leaking into it; focused gate sentinels reject application/domain outer imports (including type-only) and permit the intended inward imports/composition. Current-read fixtures with same-millisecond UUIDs and insertion/commit order differing from UUID order select the greatest visible UUID within each selected parent; a larger UUID on an older branch cannot win. Retained coherent-read evidence at the actual adapter boundary distinguishes one shared snapshot from independently changing visibility points and documents the PostgreSQL guarantee; T13 validates that mechanism.",
+      "files_hint": [
+        "apps/api/src/app/workspace-repository.ts",
+        "apps/api/src/infra/**",
+        "apps/api/test/unit/workspace-repository.spec.ts",
+        ".dependency-cruiser.cjs",
+        "tools/test-architecture-gate.mjs"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-transactional-hierarchy-persistence-and-reliable-reads.md"
+    },
+    {
+      "id": "T4",
+      "title": "Implement Project and Environment acceptance use cases",
+      "layer": "app",
+      "deps": [
+        "T2",
+        "T3"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-14a",
+        "AC-16",
+        "AC-16a",
+        "AC-17"
+      ],
+      "dod": "Injected-repository tests prove trimmed names and character preservation, no calls on invalid/missing-parent input, no success before confirmed commit, SAVE_FAILED only on known non-acceptance, and distinct unknown acceptance without retry or success. Parent-read failure before acceptance writes is known non-acceptance; generic acceptance exceptions default to unknown. Repository doubles are typed against app/workspace-repository.ts; no infrastructure imports or contract edits.",
+      "files_hint": [
+        "apps/api/src/app/record-project.ts",
+        "apps/api/src/app/record-environment.ts",
+        "apps/api/src/app/record-id.ts",
+        "apps/api/test/unit/record-context.spec.ts",
+        "apps/api/package.json",
+        "pnpm-lock.yaml"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-project-and-environment-acceptance-use-cases.md"
+    },
+    {
+      "id": "T5",
+      "title": "Implement Target and atomic Run acceptance use cases",
+      "layer": "app",
+      "deps": [
+        "T4"
+      ],
+      "acs": [
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-13",
+        "AC-14a",
+        "AC-16",
+        "AC-16a",
+        "AC-17"
+      ],
+      "dod": "Focused use-case tests prove both match outcomes, each invalid field and prerequisite, atomic run acceptance, and preserved prior data on known non-acceptance. Unknown acceptance remains distinct with no SAVED, SAVE_FAILED, pending-record status or transaction replay; generic acceptance exceptions cannot imply rollback. Repository doubles are typed against app/workspace-repository.ts; no infrastructure imports or contract edits. Table-driven cases cover all three non-empty subsets of invalid Target fields and all seven non-empty subsets of invalid Run fields, with permuted JSON/input property order: fixed first-failing code, all sorted/deduplicated paths, and zero acceptance writes.",
+      "files_hint": [
+        "apps/api/src/app/record-target.ts",
+        "apps/api/src/app/record-run.ts",
+        "apps/api/src/app/record-id.ts",
+        "apps/api/test/unit/record-evidence.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-target-and-atomic-run-acceptance-use-cases.md"
+    },
+    {
+      "id": "T6",
+      "title": "Implement authoritative workspace loading and recovery states",
+      "layer": "app",
+      "deps": [
+        "T2",
+        "T3"
+      ],
+      "acs": [
+        "AC-09",
+        "AC-14",
+        "AC-15",
+        "AC-18",
+        "AC-19",
+        "AC-19a",
+        "AC-20"
+      ],
+      "dod": "Focused loader tests cover empty, both partial levels, target without run, full MATCH/MISMATCH, and failed/malformed/inconsistent reads; repeated loads of identical inputs produce identical status. Use the data-model AC-20 cases: selected-parent/wrong-run mismatch, zero/multiple states and query failure are unavailable; partial hierarchies and older branches remain valid. Repository doubles are typed against app/workspace-repository.ts; no infrastructure imports or contract edits.",
+      "files_hint": [
+        "apps/api/src/app/load-workspace.ts",
+        "apps/api/test/unit/load-workspace.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-authoritative-workspace-loading-and-recovery-states.md"
+    },
+    {
+      "id": "T7",
+      "title": "Expose Project and Environment HTTP operations",
+      "layer": "ports",
+      "deps": [
+        "T4"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-16",
+        "AC-16a",
+        "AC-17"
+      ],
+      "dod": "Fastify injection tests match both 201 record shapes, 400 field errors, Environment 409 prerequisite message, and both operation-specific 503 codes: save_failed only for known non-acceptance, save_outcome_unknown for unknown acceptance with no success record/status. Pending commit cannot emit 201. Missing/wrong-type/unexpected fields and invalid JSON return 400 request.invalid_body with deterministic typed details.fields and no writes/default framework payload. Shared request-policy tests prove nested/full rejected-key paths, sorting/deduplication, absent/malformed/non-object bodies mapped to $, and strict validation without coercion/stripping before any use-case call; encapsulated context registration installs the shared parser-error policy. Mixed structural-invalid and whitespace-only inputs return only request.invalid_body before any domain/use-case call.",
+      "files_hint": [
+        "apps/api/src/ports/http/context-routes.ts",
+        "apps/api/src/ports/http/request-policy.ts",
+        "apps/api/test/unit/context-routes.spec.ts",
+        "apps/api/test/unit/request-policy.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/expose-project-and-environment-http-operations.md"
+    },
+    {
+      "id": "T8",
+      "title": "Expose Target and Run HTTP operations",
+      "layer": "ports",
+      "deps": [
+        "T5",
+        "T7"
+      ],
+      "acs": [
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-13",
+        "AC-15",
+        "AC-16",
+        "AC-16a",
+        "AC-17"
+      ],
+      "dod": "Fastify injection tests prove 201 nested run/state shape, target response without status, all named 400/409 branches, and both operation-specific 503 codes: save_failed only for known non-acceptance, save_outcome_unknown for unknown acceptance with no success record/status. No success before confirmed commit. Nested and top-level missing/wrong-type/unexpected fields and invalid JSON return 400 request.invalid_body with deterministic typed details.fields and no writes/default framework payload. Consume T7 request-policy read-only in encapsulated evidence registration; prove absent/malformed/non-object bodies and sorted/deduplicated nested paths without policy duplication. Prove all three invalid Target-field subsets and all seven invalid Run-field subsets, independent of JSON property order: fixed first-failing code plus all sorted paths. Mixed structural/domain failures return only request.invalid_body with zero use-case calls.",
+      "files_hint": [
+        "apps/api/src/ports/http/evidence-routes.ts",
+        "apps/api/test/unit/evidence-routes.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/expose-target-and-run-http-operations.md"
+    },
+    {
+      "id": "T9",
+      "title": "Wire the workspace API and persistence into the existing server",
+      "layer": "wiring",
+      "deps": [
+        "T6",
+        "T7",
+        "T8"
+      ],
+      "acs": [
+        "AC-09",
+        "AC-18",
+        "AC-19",
+        "AC-19a",
+        "AC-20"
+      ],
+      "dod": "App injection tests cover workspace 200 and 503 envelopes and all four mounted create routes; existing health/config tests, typecheck and architecture gate pass with updated callers. server.ts alone binds the concrete product adapter and injects its application contract; all four POSTs preserve the T7 scoped policy for structural and parser failures without changing health behavior.",
+      "files_hint": [
+        "apps/api/src/ports/http/workspace-route.ts",
+        "apps/api/src/app.ts",
+        "apps/api/src/server.ts",
+        "apps/api/test/unit/app.spec.ts",
+        "apps/api/test/unit/workspace-route.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/wire-the-workspace-api-and-persistence-into-the-existing-server.md"
+    },
+    {
+      "id": "T10",
+      "title": "Implement the browser HTTP adapter from the approved contract",
+      "layer": "ports",
+      "deps": [],
+      "acs": [
+        "AC-16",
+        "AC-16a",
+        "AC-17",
+        "AC-20"
+      ],
+      "dod": "Injected-fetch tests prove exact paths/bodies and successful payloads, 400 field details, 409 prerequisites, and status-plus-code distinction between known 503 save_failed and 503 save_outcome_unknown for all four creates; pending requests never resolve as accepted. Rejected/unusable/unrecognized POST responses expose unknown acceptance without POST replay; GET failure exposes unavailable recovery. Multi-field 400 fixtures preserve the primary code and complete sorted field list, including a Run reference code whose field sorts last.",
+      "files_hint": [
+        "apps/web/src/api/",
+        "apps/web/test/unit/workspace-client.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/implement-the-browser-http-adapter-from-the-approved-contract.md"
+    },
+    {
+      "id": "T11",
+      "title": "Build the progressive hierarchy and record-entry workspace",
+      "layer": "ui",
+      "deps": [
+        "T9",
+        "T10"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-04",
+        "AC-05",
+        "AC-06",
+        "AC-07",
+        "AC-08",
+        "AC-12",
+        "AC-13",
+        "AC-16",
+        "AC-16a",
+        "AC-17",
+        "AC-17a",
+        "AC-19a"
+      ],
+      "dod": "Focused UI/state tests prove no cached hierarchy during load, accepted-level-only display, every action gate, field errors/retry, contextual SAVED only after completion, and unchanged accepted levels/input on known HTTP SAVE_FAILED. Received save_outcome_unknown and lost/unusable POST responses block all creates and trigger GET recovery; recovered hierarchy replaces prior state without retroactive SAVED/SAVE_FAILED or POST replay, failed recovery stays UNAVAILABLE with GET retry only. Any create after reliable recovery requires explicit user action; T14 verifies the rendered path. Both-empty Target and all-empty Run cases show inline non-empty-after-trim feedback on every returned field, preserve input/accepted hierarchy, and permit correction/retry; the primary code never hides another field.",
+      "files_hint": [
+        "apps/web/src/App.tsx",
+        "apps/web/src/WorkspaceHierarchy.tsx",
+        "apps/web/src/RecordForm.tsx",
+        "apps/web/src/OutcomeBanner.tsx",
+        "apps/web/src/styles.css",
+        "apps/web/test/unit/workspace-interaction.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/build-the-progressive-hierarchy-and-record-entry-workspace.md"
+    },
+    {
+      "id": "T12",
+      "title": "Render evidence guidance, applicability and unavailable states",
+      "layer": "ui",
+      "deps": [
+        "T11"
+      ],
+      "acs": [
+        "AC-09",
+        "AC-10",
+        "AC-11",
+        "AC-14",
+        "AC-15",
+        "AC-18",
+        "AC-19",
+        "AC-20"
+      ],
+      "dod": "Presentation tests cover SCR-01 guidance and both results, hidden pre-target status, and unavailable state without stale MATCH/MISMATCH; no text treats evidence status as outcome or Readiness.",
+      "files_hint": [
+        "apps/web/src/EvidenceStatusPanel.tsx",
+        "apps/web/src/App.tsx",
+        "apps/web/src/styles.css",
+        "apps/web/test/unit/evidence-presentation.spec.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/render-evidence-guidance-applicability-and-unavailable-states.md"
+    },
+    {
+      "id": "T13",
+      "title": "Prove deployed API durability and error contracts",
+      "layer": "tests",
+      "deps": [
+        "T9"
+      ],
+      "acs": [
+        "AC-04",
+        "AC-07",
+        "AC-13",
+        "AC-14a",
+        "AC-16",
+        "AC-16a",
+        "AC-17",
+        "AC-20"
+      ],
+      "dod": "pnpm test:api passes on the controlled Compose system with exact envelopes, durable state inspection and safe retry only after known non-acceptance. Real PostgreSQL evidence distinguishes atomic rollback from commit with acknowledgement hidden at a test-owned driver boundary: unknown response followed by GET restores both rows; a controlled non-commit with the same unknown response restores neither. Prior rows remain unchanged and no automatic transaction retry occurs. Label composed API/real-DB fault fixtures separately from deployed checks. AC-20 zero/multiple current-Run states and query failure yield 503 workspace.unavailable, older branches plus current partial hierarchy yield 200, and structural request failures use typed 400 envelopes. Deployed both-empty Target, all-empty Run and mixed structural/domain cases assert exact precedence/complete field lists and no durable writes; controlled ordering fixtures confirm greatest-UUID parent-scoped current selection rather than insertion/commit order. Coherent-read evidence is validated against the actual PostgreSQL mechanism per the task's evidence allocation; independently changing snapshots cannot pass the oracle, and a controlled database interleaving is added only if lower-level proof is insufficient.",
+      "files_hint": [
+        "tests/api/workspace.spec.ts",
+        "tests/api/workspace-fixtures.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/prove-deployed-api-durability-and-error-contracts.md"
+    },
+    {
+      "id": "T14",
+      "title": "Prove progressive browser behavior and refresh recovery",
+      "layer": "tests",
+      "deps": [
+        "T12"
+      ],
+      "acs": [
+        "AC-01",
+        "AC-02",
+        "AC-03",
+        "AC-05",
+        "AC-06",
+        "AC-08",
+        "AC-09",
+        "AC-10",
+        "AC-11",
+        "AC-12",
+        "AC-15",
+        "AC-16",
+        "AC-16a",
+        "AC-17",
+        "AC-17a",
+        "AC-18",
+        "AC-19",
+        "AC-19a",
+        "AC-20"
+      ],
+      "dod": "pnpm test:e2e proves SCR-01 states, restored hierarchy and identical status after reload; injected responses are separated from real persistence evidence and normal Playwright failure artifacts remain available. Received 503 save_outcome_unknown and lost-response cases each cover accepted and absent recovery state, GET before continuation, no automatic POST replay, no retroactive SAVED/SAVE_FAILED, and failed recovery with GET-only retry. Known 503 save_failed still permits user-initiated safe POST retry; any create after unknown-outcome recovery is explicit continuation without a duplicate-free guarantee.",
+      "files_hint": [
+        "tests/e2e/workspace.spec.ts",
+        "tests/e2e/foundation.spec.ts",
+        "tests/e2e/workspace-fixtures.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/prove-progressive-browser-behavior-and-refresh-recovery.md"
+    },
+    {
+      "id": "T15",
+      "title": "Extend the canonical persistence smoke to product restart recovery",
+      "layer": "tests",
+      "deps": [
+        "T13",
+        "T14"
+      ],
+      "acs": [
+        "AC-18",
+        "AC-19",
+        "AC-19a",
+        "AC-20"
+      ],
+      "dod": "Controlled restart checks pass with identical hierarchy/status and explicit failure on unavailable storage; pnpm verify invokes the new smoke and retains the existing foundation checks. Document that host-reset durability is provided by retained PostgreSQL storage, with no physical-reset test claimed.",
+      "files_hint": [
+        "scripts/check-workspace-persistence.sh",
+        "scripts/verify.sh",
+        "package.json",
+        "tests/api/workspace-restart-fixtures.ts"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/extend-the-canonical-persistence-smoke-to-product-restart-recovery.md"
+    },
+    {
+      "id": "T16",
+      "title": "Document implemented workspace contracts and UI inventory",
+      "layer": "docs",
+      "deps": [
+        "T15"
+      ],
+      "acs": [
+        "AC-15",
+        "AC-18",
+        "AC-20"
+      ],
+      "dod": "pnpm check:contracts and pnpm check:architecture pass; every documented source path exists, inventory states match SCR-01 and recovery claims match T15 evidence without outcome/Readiness claims. Final reconciliation confirms earlier per-task registry synchronization, durable implemented cross-task surfaces only, and no planned/private-helper entries.",
+      "files_hint": [
+        "README.md",
+        "docs/project-map.md",
+        "docs/architecture-map.md",
+        "docs/design-system.md",
+        "docs/contracts/"
+      ],
+      "file": "docs/features/walking-skeleton-readiness/tasks/document-implemented-workspace-contracts-and-ui-inventory.md"
+    }
+  ]
+}
